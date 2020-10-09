@@ -112,7 +112,7 @@ pub enum Message {
     LatestBackup(Option<NaiveDateTime>),
     BackupFinished(Result<NaiveDateTime>),
     CatalogDownloaded(Result<Catalog>),
-    CatalogInstallAddonFetched(Result<(u32, Flavor, Addon)>),
+    CatalogInstallAddonFetched((Flavor, u32, Result<Addon>)),
 }
 
 pub struct Ajour {

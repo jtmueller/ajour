@@ -1066,18 +1066,10 @@ pub fn handle_message(ajour: &mut Ajour, message: Message) -> Result<Command<Mes
             addons.push(empty_addon.clone());
 
             if let Some(addon_path) = ajour.config.get_addon_directory_for_flavor(&flavor) {
-                let command = match source {
-                    catalog::Source::Curse => Command::perform(
-                        curse_api::latest_stable_addon_from_id(id, empty_addon, addon_path, flavor),
-                        Message::CatalogInstallAddonFetched,
-                    ),
-                    catalog::Source::Tukui => Command::perform(
-                        tukui_api::latest_stable_addon_from_id(id, empty_addon, addon_path, flavor),
-                        Message::CatalogInstallAddonFetched,
-                    ),
-                };
-
-                return Ok(command);
+                return Ok(Command::perform(
+                    perform_fetch_latest_stable_addon(source, id, empty_addon, addon_path, flavor),
+                    Message::CatalogInstallAddonFetched,
+                ));
             }
         }
         Message::Interaction(Interaction::CatalogCategorySelected(category)) => {
@@ -1123,42 +1115,51 @@ pub fn handle_message(ajour: &mut Ajour, message: Message) -> Result<Command<Mes
 
             query_and_sort_catalog(ajour);
         }
-        Message::CatalogInstallAddonFetched(Ok((id, flavor, addon))) => {
-            log::debug!(
-                "Message::CatalogInstallAddonFetched({:?}, {:?})",
-                flavor,
-                &addon.curse_id
-            );
+        Message::CatalogInstallAddonFetched((flavor, id, result)) => match result {
+            Ok(addon) => {
+                log::debug!(
+                    "Message::CatalogInstallAddonFetched({:?}, {:?})",
+                    flavor,
+                    &id
+                );
 
-            if let Some(addons) = ajour.addons.get_mut(&flavor) {
-                // Remove the empty addon and add in our rich addon
-                if addons.iter_mut().any(|a| a.id == id.to_string()) {
+                if let Some(addons) = ajour.addons.get_mut(&flavor) {
+                    // Remove the empty addon and add in our rich addon
+                    if addons.iter_mut().any(|a| a.id == id.to_string()) {
+                        addons.retain(|a| a.id != id.to_string());
+                    }
+
+                    addons.push(addon.clone());
+
+                    let to_directory = ajour
+                        .config
+                        .get_temporary_addon_directory(flavor)
+                        .expect("Expected a valid path");
+
+                    return Ok(Command::perform(
+                        perform_download_addon(
+                            ajour.shared_client.clone(),
+                            flavor,
+                            addon,
+                            to_directory,
+                        ),
+                        Message::DownloadedAddon,
+                    ));
+                }
+            }
+            Err(error) => {
+                log::error!("{}", error);
+
+                if let Some(addons) = ajour.addons.get_mut(&flavor) {
+                    // Remove the empty addon since it failed
                     addons.retain(|a| a.id != id.to_string());
                 }
-
-                addons.push(addon.clone());
-
-                let to_directory = ajour
-                    .config
-                    .get_temporary_addon_directory(flavor)
-                    .expect("Expected a valid path");
-
-                return Ok(Command::perform(
-                    perform_download_addon(
-                        ajour.shared_client.clone(),
-                        flavor,
-                        addon,
-                        to_directory,
-                    ),
-                    Message::DownloadedAddon,
-                ));
             }
-        }
+        },
         Message::Error(error)
         | Message::Parse(Err(error))
         | Message::NeedsUpdate(Err(error))
         | Message::CatalogDownloaded(Err(error))
-        | Message::CatalogInstallAddonFetched(Err(error))
         | Message::DownloadedAddon((_, _, Err(error))) => {
             log::error!("{}", error);
 
@@ -1241,6 +1242,26 @@ async fn perform_unpack_addon(
         addon.id.clone(),
         install_addon(&addon, &from_directory, &to_directory).await,
     )
+}
+
+/// Unzips `Addon` at given `from_directory` and moves it `to_directory`.
+async fn perform_fetch_latest_stable_addon(
+    source: catalog::Source,
+    source_id: u32,
+    addon: Addon,
+    addon_path: PathBuf,
+    flavor: Flavor,
+) -> (Flavor, u32, Result<Addon>) {
+    let result = match source {
+        catalog::Source::Curse => {
+            curse_api::latest_stable_addon_from_id(source_id, addon, addon_path, flavor).await
+        }
+        catalog::Source::Tukui => {
+            tukui_api::latest_stable_addon_from_id(source_id, addon, addon_path, flavor).await
+        }
+    };
+
+    (flavor, source_id, result)
 }
 
 fn sort_addons(addons: &mut [Addon], sort_direction: SortDirection, column_key: ColumnKey) {

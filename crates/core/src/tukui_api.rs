@@ -57,7 +57,7 @@ pub async fn latest_stable_addon_from_id(
     mut addon: Addon,
     mut addon_path: PathBuf,
     flavor: Flavor,
-) -> Result<(u32, Flavor, Addon)> {
+) -> Result<Addon> {
     let tukui_id_string = tukui_id.to_string();
 
     let package = fetch_remote_package(&tukui_id_string, &flavor).await?;
@@ -73,5 +73,5 @@ pub async fn latest_stable_addon_from_id(
 
     addon.apply_tukui_package(&package);
 
-    Ok((tukui_id, flavor, addon))
+    Ok(addon)
 }

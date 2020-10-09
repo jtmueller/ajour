@@ -149,7 +149,7 @@ pub async fn latest_stable_addon_from_id(
     mut addon: Addon,
     mut addon_path: PathBuf,
     flavor: Flavor,
-) -> Result<(u32, Flavor, Addon)> {
+) -> Result<Addon> {
     let packages: Vec<Package> = fetch_remote_packages_by_ids(&[curse_id]).await?;
 
     let package = packages.into_iter().next().ok_or_else(|| {
@@ -209,5 +209,5 @@ pub async fn latest_stable_addon_from_id(
     addon.remote_packages = remote_packages;
     addon.release_channel = ReleaseChannel::Stable;
 
-    Ok((curse_id, flavor, addon))
+    Ok(addon)
 }
