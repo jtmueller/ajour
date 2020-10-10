@@ -1082,11 +1082,13 @@ pub fn menu_container<'a>(
     settings_button_state: &'a mut button::State,
     addon_mode_button_state: &'a mut button::State,
     catalog_mode_btn_state: &'a mut button::State,
-    needs_update: Option<&'a str>,
+    latest_release: Option<&self_update::update::Release>,
     new_release_button_state: &'a mut button::State,
 ) -> Container<'a, Message> {
     // A row contain general settings.
     let mut settings_row = Row::new().height(Length::Units(40));
+
+    let mut needs_update = false;
 
     let mut addons_mode_button = Button::new(
         addon_mode_button_state,
@@ -1136,8 +1138,17 @@ pub fn menu_container<'a>(
         .push(catalog_mode_button.map(Message::Interaction))
         .spacing(1);
 
-    let version_text = Text::new(if let Some(new_version) = needs_update {
-        format!("New Ajour version available {} -> {}", VERSION, new_version)
+    let version_text = Text::new(if let Some(release) = &latest_release {
+        if self_update::version::bump_is_greater(VERSION, &release.version).unwrap() {
+            needs_update = true;
+
+            format!(
+                "New Ajour version available {} -> {}",
+                VERSION, &release.version
+            )
+        } else {
+            VERSION.to_owned()
+        }
     } else {
         VERSION.to_owned()
     })
@@ -1145,7 +1156,7 @@ pub fn menu_container<'a>(
     .horizontal_alignment(HorizontalAlignment::Right);
 
     let mut version_container = Container::new(version_text).center_y().padding(5);
-    if needs_update.is_some() {
+    if needs_update {
         version_container = version_container.style(style::StatusErrorTextContainer(color_palette));
     } else {
         version_container = version_container.style(style::SecondaryTextContainer(color_palette));
@@ -1169,16 +1180,14 @@ pub fn menu_container<'a>(
         .push(version_container);
 
     // Add download button to latest github release page if Ajour update is available.
-    if needs_update.is_some() {
+    if needs_update {
         let mut new_release_button = Button::new(
             new_release_button_state,
-            Text::new("Download").size(DEFAULT_FONT_SIZE),
+            Text::new("Update").size(DEFAULT_FONT_SIZE),
         )
         .style(style::SecondaryButton(color_palette));
 
-        new_release_button = new_release_button.on_press(Interaction::OpenLink(
-            "https://github.com/casperstorm/ajour/releases/latest".to_owned(),
-        ));
+        new_release_button = new_release_button.on_press(Interaction::UpdateAjour);
 
         let new_release_button: Element<Interaction> = new_release_button.into();
 
