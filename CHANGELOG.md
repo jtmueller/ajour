@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 The sections should follow the order `Packaging`, `Added`, `Changed`, `Fixed` and `Removed`.
 
 ## [Unreleased]
+### Fixed
+- Fixed issue where Tukui addons would delete dependency standalone addons during update.
+- Now correctly shows all sub-addons if they are a seperate addons.
+  - An example is Altoholic-Retail (Teelo's Fork). All it's dependencies are actually standalone addons. They are now correctly shown.
+
+## [0.4.3] - 2020-10-22
+
+### Fixed
+- Fixed the CurseForge API issue by using another api that caches the responses (kindly provided by wowup.io).
+- Minor improvements to the matching addons which was caused by yesterdays update (SORRY!).
+
+## [0.4.2] - 2020-10-21
+### Added
+- Add fallback measures for displaying addons when fingerprinting fails or we can't link an addon to a remote registry.
+  - Curse addons that have been locally modified should now display properly in Ajour. A `Repair` button will be present which will install the latest version of the addon so Ajour can accurately track the addon without local modifications.
+  - Addons that can't match to any registry will now show up in Ajour as status `Unknown`. Addons that have multiple folders will not be grouped and instead we will show one entry for every folder.
+  - **NOTE**: The current ongoing issues with the CurseForge fingerprint API means some addons will randomly get one of these new statuses, but should be ignored until that issue has been resolved.
+- Added Latest Release column to both My Addons and Catalog.
+- Support for Beta and PTR.
+- When pressing on either `local` or `remote` version in MyAddons you will see the changelog.
+- When pressing on the addon title inside the catalog Ajour will open the addon website.
+
+### Fixed
+- Fixed bug where orphaned folders could exist after updating an addon if the newer version of an addon didnt't include those folders anymore.
+- Ensure symlinks are removed in the addons folder prior to extracting an addon, so we don't write into the symlink and instead remove the link / create a new folder.
+  - This is a request from a developer who symlinks their source code into the addons folder and Ajour could accidently overwrite it.
+- Fixed catalog install buttons getting stuck when install fails or addon is unavailable to download. Button will now show "Retry" if failed and disabled as "Unavailable" if the addon is unavailable.
+- Added a check on content length of downloaded addons when updating or installing and properly set an error message when this occurs so we know the update / install failed so use can retry.
+- Fixed a bug in the logic for selecting a relevant release channel.
+
+### Changed
+- Now only shows the flavors which is detected in your World of Warcraft folder
+
+### Packaging
+- Added Forest Night theme
+
+## [0.4.1] - 2020-10-11
+### Added
+- 10 new themes has been bundled together with the application.
+  - The way you define a theme has been refactored so we can define more nuances.
+  - This is a breaking changes for old themes, which needs to be refactored to the new format. By default if the theme does not conform to the new format, Ajour will simply not try to parse it.
+- Added a command line option to update all addons with an update without launching the GUI. Process will exit after completing.
+  - Use `ajour update` from command line
+
+### Fixed
+- Fixed a case where we would choose alpha even though it was older than stable.
+- Fixed fingerprinting where some addons would fail during fingerprinting due to invalid UTF-8 characters and missing files. These addons now successfully fingerprint.
 
 ## [0.4.0] - 2020-10-06
 ### Added
