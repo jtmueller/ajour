@@ -1,5 +1,8 @@
 use crate::VERSION;
 
+use ajour_core::config::Flavor;
+
+use isahc::http::Uri;
 use structopt::{
     clap::{self, AppSettings},
     StructOpt,
@@ -73,10 +76,32 @@ pub struct Opts {
     pub antialiasing: Option<bool>,
     #[structopt(subcommand)]
     pub command: Option<Command>,
+    #[structopt(long, hidden = true)]
+    pub self_update_temp: Option<String>,
 }
 
 #[derive(Debug, StructOpt)]
 pub enum Command {
     /// Update all addons from the command line then exit
     Update,
+    /// Install an addon from the command line
+    Install {
+        #[structopt(parse(try_from_str = str_to_flavor), possible_values = &["retail","ptr","beta","classic","classic_ptr"])]
+        /// flavor to install addon under
+        flavor: Flavor,
+        #[structopt()]
+        /// source url [Github & Gitlab currently supported]
+        url: Uri,
+    },
+}
+
+fn str_to_flavor(s: &str) -> Result<Flavor, &'static str> {
+    match s {
+        "retail" => Ok(Flavor::Retail),
+        "beta" => Ok(Flavor::RetailBeta),
+        "ptr" => Ok(Flavor::RetailPTR),
+        "classic" => Ok(Flavor::Classic),
+        "classic_ptr" => Ok(Flavor::ClassicPTR),
+        _ => Err("valid values are ['retail','ptr','beta','classic','classic_ptr']"),
+    }
 }

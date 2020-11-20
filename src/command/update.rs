@@ -3,11 +3,16 @@
 use crate::log_error;
 
 use ajour_core::addon::Addon;
+use ajour_core::cache::{
+    load_addon_cache, load_fingerprint_cache, update_addon_cache, AddonCache, AddonCacheEntry,
+    FingerprintCache,
+};
 use ajour_core::config::{load_config, Flavor};
 use ajour_core::error::ClientError;
 use ajour_core::fs::install_addon;
 use ajour_core::network::download_addon;
-use ajour_core::parse::{read_addon_directory, update_addon_fingerprint, FingerprintCollection};
+use ajour_core::parse::{read_addon_directory, update_addon_fingerprint};
+use ajour_core::repository::RepositoryKind;
 use ajour_core::Result;
 
 use async_std::sync::{Arc, Mutex};
@@ -18,6 +23,7 @@ use futures::future::join_all;
 use isahc::config::RedirectPolicy;
 use isahc::prelude::*;
 
+use std::convert::TryFrom;
 use std::path::PathBuf;
 
 pub fn update_all_addons() -> Result<()> {
@@ -26,8 +32,10 @@ pub fn update_all_addons() -> Result<()> {
     task::block_on(async {
         let config = load_config().await?;
 
-        // Fingerprint cache will be fetched during `read_addon_directory`
-        let fingerprint_collection: Arc<Mutex<_>> = Default::default();
+        let fingerprint_cache: Arc<Mutex<_>> =
+            Arc::new(Mutex::new(load_fingerprint_cache().await?));
+
+        let addon_cache: Arc<Mutex<_>> = Arc::new(Mutex::new(load_addon_cache().await?));
 
         let mut addons_to_update = vec![];
 
@@ -45,9 +53,13 @@ pub fn update_all_addons() -> Result<()> {
             // Only returns None if the path isn't set in the config
             let addon_directory = config.get_addon_directory_for_flavor(flavor).ok_or_else(|| ClientError::Custom("No WoW directory set. Launch Ajour and make sure a WoW directory is set before using the command line.".to_string()))?;
 
-            if let Ok(addons) =
-                read_addon_directory(fingerprint_collection.clone(), &addon_directory, *flavor)
-                    .await
+            if let Ok(addons) = read_addon_directory(
+                Some(addon_cache.clone()),
+                Some(fingerprint_cache.clone()),
+                &addon_directory,
+                *flavor,
+            )
+            .await
             {
                 // Get any saved release channel preferences from config
                 let release_channels = config
@@ -82,10 +94,11 @@ pub fn update_all_addons() -> Result<()> {
                             .expect("Expected a valid path");
 
                         // Only add addons that have an update available
-                        if addon.is_updatable(package) {
+                        if addon.is_updatable(&package) {
                             addons_to_update.push((
                                 shared_client.clone(),
-                                fingerprint_collection.clone(),
+                                addon_cache.clone(),
+                                fingerprint_cache.clone(),
                                 *flavor,
                                 addon,
                                 temp_directory,
@@ -104,11 +117,11 @@ pub fn update_all_addons() -> Result<()> {
 
         addons_to_update
             .iter()
-            .for_each(|(_, _, flavor, addon, ..)| {
+            .for_each(|(_, _, _, flavor, addon, ..)| {
                 let current_version = addon.version().unwrap_or_default();
                 let new_version = addon
                     .relevant_release_package()
-                    .map(|p| p.version.clone())
+                    .map(|p| p.version)
                     .unwrap_or_default();
 
                 log::info!(
@@ -150,9 +163,18 @@ pub fn update_all_addons() -> Result<()> {
 ///
 /// Downloads the latest file, extracts it and refingerprints the addon, saving it to the cache.
 async fn update_addon(
-    (shared_client, fingerprint_collection, flavor, addon, temp_directory, addon_directory): (
+    (
+        shared_client,
+        addon_cache,
+        fingerprint_cache,
+        flavor,
+        mut addon,
+        temp_directory,
+        addon_directory,
+    ): (
         Arc<HttpClient>,
-        Arc<Mutex<Option<FingerprintCollection>>>,
+        Arc<Mutex<AddonCache>>,
+        Arc<Mutex<FingerprintCache>>,
         Flavor,
         Addon,
         PathBuf,
@@ -163,7 +185,9 @@ async fn update_addon(
     download_addon(&shared_client, &addon, &temp_directory).await?;
 
     // Extracts addon from the downloaded archive to the addon directory and removes the archive
-    install_addon(&addon, &temp_directory, &addon_directory).await?;
+    let installed_folders = install_addon(&addon, &temp_directory, &addon_directory).await?;
+
+    addon.update_addon_folders(installed_folders);
 
     // Stores each folder name we need to fingerprint
     let mut folders_to_fingerprint = vec![];
@@ -171,7 +195,7 @@ async fn update_addon(
     // Store all folder names
     folders_to_fingerprint.extend(addon.folders.iter().map(|f| {
         (
-            fingerprint_collection.clone(),
+            fingerprint_cache.clone(),
             flavor,
             &addon_directory,
             f.id.clone(),
@@ -180,8 +204,8 @@ async fn update_addon(
 
     // Call `update_addon_fingerprint` on each folder concurrently
     for result in join_all(folders_to_fingerprint.into_iter().map(
-        |(fingerprint_collection, flavor, addon_dir, addon_id)| {
-            update_addon_fingerprint(fingerprint_collection, flavor, addon_dir, addon_id)
+        |(fingerprint_cache, flavor, addon_dir, addon_id)| {
+            update_addon_fingerprint(fingerprint_cache, flavor, addon_dir, addon_id)
         },
     ))
     .await
@@ -189,6 +213,16 @@ async fn update_addon(
         if let Err(e) = result {
             // Log any errors fingerprinting the folder
             log_error(&e);
+        }
+    }
+
+    // Update cache for addon
+    if addon.repository_kind() == Some(RepositoryKind::Tukui)
+        || addon.repository_kind() == Some(RepositoryKind::WowI)
+        || matches!(addon.repository_kind(), Some(RepositoryKind::Git(_)))
+    {
+        if let Ok(entry) = AddonCacheEntry::try_from(&addon) {
+            update_addon_cache(addon_cache, entry, flavor).await?;
         }
     }
 
