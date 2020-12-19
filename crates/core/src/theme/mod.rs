@@ -211,7 +211,7 @@ impl Theme {
                     primary: hex_to_color("#505a60").unwrap(),
                     secondary: hex_to_color("#465258").unwrap(),
                     surface: hex_to_color("#999f93").unwrap(),
-                    error: hex_to_color("#614b51").unwrap(),
+                    error: hex_to_color("#74484c").unwrap(),
                 },
                 bright: BrightColors {
                     primary: hex_to_color("#a7c080").unwrap(),
@@ -348,20 +348,68 @@ impl Theme {
             name: "Sort".to_string(),
             palette: ColorPalette {
                 base: BaseColors {
-                    background: hex_to_color("#1c1c1c").unwrap(),
-                    foreground: hex_to_color("#262626").unwrap(),
+                    background: hex_to_color("#000000").unwrap(),
+                    foreground: hex_to_color("#101010").unwrap(),
                 },
                 normal: NormalColors {
-                    primary: hex_to_color("#2d3d2f").unwrap(),
-                    secondary: hex_to_color("#3f4f56").unwrap(),
-                    surface: hex_to_color("#8a8a8a").unwrap(),
-                    error: hex_to_color("#713e40").unwrap(),
+                    primary: hex_to_color("#525252").unwrap(),
+                    secondary: hex_to_color("#525252").unwrap(),
+                    surface: hex_to_color("#525252").unwrap(),
+                    error: hex_to_color("#525252").unwrap(),
                 },
                 bright: BrightColors {
-                    primary: hex_to_color("#81ca8c").unwrap(),
-                    secondary: hex_to_color("#81abbd").unwrap(),
-                    surface: hex_to_color("#bcbcbc").unwrap(),
-                    error: hex_to_color("#FF474E").unwrap(),
+                    primary: hex_to_color("#A3A3A3").unwrap(),
+                    secondary: hex_to_color("#A3A3A3").unwrap(),
+                    surface: hex_to_color("#A3A3A3").unwrap(),
+                    error: hex_to_color("#A3A3A3").unwrap(),
+                },
+            },
+        }
+    }
+
+    pub fn ferra() -> Theme {
+        Theme {
+            name: "Ferra".to_string(),
+            palette: ColorPalette {
+                base: BaseColors {
+                    background: hex_to_color("#211f22").unwrap(),
+                    foreground: hex_to_color("#2b292d").unwrap(),
+                },
+                normal: NormalColors {
+                    primary: hex_to_color("#664A50").unwrap(),
+                    secondary: hex_to_color("#855859").unwrap(),
+                    surface: hex_to_color("#816961").unwrap(),
+                    error: hex_to_color("#713f47").unwrap(),
+                },
+                bright: BrightColors {
+                    primary: hex_to_color("#b4838d").unwrap(),
+                    secondary: hex_to_color("#e5989b").unwrap(),
+                    surface: hex_to_color("#fecdb2").unwrap(),
+                    error: hex_to_color("#e06b75").unwrap(),
+                },
+            },
+        }
+    }
+
+    pub fn one_dark() -> Theme {
+        Theme {
+            name: "One Dark".to_string(),
+            palette: ColorPalette {
+                base: BaseColors {
+                    background: hex_to_color("#282c34").unwrap(),
+                    foreground: hex_to_color("#2c323c").unwrap(),
+                },
+                normal: NormalColors {
+                    primary: hex_to_color("#385c7c").unwrap(),
+                    secondary: hex_to_color("#654473").unwrap(),
+                    surface: hex_to_color("#5b626e").unwrap(),
+                    error: hex_to_color("#713f47").unwrap(),
+                },
+                bright: BrightColors {
+                    primary: hex_to_color("#61afef").unwrap(),
+                    secondary: hex_to_color("#c679dd").unwrap(),
+                    surface: hex_to_color("#a6adba").unwrap(),
+                    error: hex_to_color("#e06b75").unwrap(),
                 },
             },
         }
@@ -417,7 +465,7 @@ mod de {
     use serde::de::{self, Error, Unexpected, Visitor};
     use std::fmt;
 
-    pub fn deserialize_color_hex_string<'de, D>(
+    pub(crate) fn deserialize_color_hex_string<'de, D>(
         deserializer: D,
     ) -> Result<iced_native::Color, D::Error>
     where

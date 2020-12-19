@@ -1,6 +1,5 @@
 use crate::config::Flavor;
-use crate::error;
-use crate::Result;
+use crate::error::RepositoryError;
 
 use chrono::{DateTime, Utc};
 use isahc::http::uri::Uri;
@@ -12,7 +11,7 @@ use std::collections::HashMap;
 mod backend;
 use backend::Backend;
 
-pub(crate) use backend::{curse, tukui, wowi};
+pub use backend::{curse, tukui, wowi};
 use backend::{Curse, Github, Gitlab, Tukui, WowI};
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Ord, Eq, Serialize, Deserialize)]
@@ -42,7 +41,7 @@ impl std::fmt::Display for RepositoryKind {
 }
 
 impl RepositoryKind {
-    pub fn is_git(self) -> bool {
+    pub(crate) fn is_git(self) -> bool {
         matches!(self, RepositoryKind::Git(_))
     }
 }
@@ -72,10 +71,10 @@ impl std::fmt::Debug for RepositoryPackage {
 }
 
 impl RepositoryPackage {
-    pub fn from_source_url(flavor: Flavor, url: Uri) -> Result<Self> {
-        let host = url
-            .host()
-            .ok_or_else(|| error!("no host for url: {:?}", url))?;
+    pub fn from_source_url(flavor: Flavor, url: Uri) -> Result<Self, RepositoryError> {
+        let host = url.host().ok_or(RepositoryError::GitMissingHost {
+            url: url.to_string(),
+        })?;
 
         let (backend, kind): (Box<dyn Backend>, _) = match host {
             "github.com" => (
@@ -93,10 +92,9 @@ impl RepositoryPackage {
                 RepositoryKind::Git(GitKind::Gitlab),
             ),
             _ => {
-                return Err(error!(
-                    "Invalid host, only GitHub and GitLab are supported: {}",
-                    host
-                ))
+                return Err(RepositoryError::GitInvalidHost {
+                    host: host.to_string(),
+                })
             }
         };
 
@@ -108,7 +106,11 @@ impl RepositoryPackage {
         })
     }
 
-    pub fn from_repo_id(flavor: Flavor, kind: RepositoryKind, id: String) -> Result<Self> {
+    pub fn from_repo_id(
+        flavor: Flavor,
+        kind: RepositoryKind,
+        id: String,
+    ) -> Result<Self, RepositoryError> {
         let backend: Box<dyn Backend> = match kind {
             RepositoryKind::Curse => Box::new(Curse {
                 id: id.clone(),
@@ -122,9 +124,7 @@ impl RepositoryPackage {
                 id: id.clone(),
                 flavor,
             }),
-            RepositoryKind::Git(_) => {
-                return Err(error!("Git repo must be created with `from_source_url`"))
-            }
+            RepositoryKind::Git(_) => return Err(RepositoryError::GitWrongConstructor),
         };
 
         Ok(RepositoryPackage {
@@ -135,56 +135,18 @@ impl RepositoryPackage {
         })
     }
 
-    pub fn with_metadata(mut self, metadata: RepositoryMetadata) -> Self {
+    pub(crate) fn with_metadata(mut self, metadata: RepositoryMetadata) -> Self {
         self.metadata = metadata;
 
         self
     }
 
-    pub async fn resolve_metadata(&mut self) -> Result<()> {
+    pub async fn resolve_metadata(&mut self) -> Result<(), RepositoryError> {
         let metadata = self.backend.get_metadata().await?;
 
         self.metadata = metadata;
 
         Ok(())
-    }
-
-    /// Get changelog from the repository
-    ///
-    /// `channel` and `is_remote` are only used for the Curse repository since
-    /// we can get unique changelogs for each version
-    pub async fn get_changelog(
-        &self,
-        channel: ReleaseChannel,
-        is_remote: bool,
-    ) -> Result<(String, String)> {
-        let file_id = if self.kind == RepositoryKind::Curse {
-            if is_remote {
-                self.metadata
-                    .remote_packages
-                    .get(&channel)
-                    .map(|p| p.file_id)
-                    .flatten()
-            } else {
-                self.metadata.file_id
-            }
-        } else {
-            None
-        };
-
-        let tag_name = if self.kind.is_git() {
-            let remote_package = self
-                .metadata
-                .remote_packages
-                .get(&channel)
-                .ok_or_else(|| error!("No remote package for channel {:?}", channel))?;
-
-            Some(remote_package.version.clone())
-        } else {
-            None
-        };
-
-        self.backend.get_changelog(file_id, tag_name).await
     }
 }
 
@@ -203,16 +165,20 @@ pub struct RepositoryMetadata {
     pub(crate) game_version: Option<String>,
     pub(crate) file_id: Option<i64>,
 
+    // todo (casperstorm): better description here.
+    // This is constructed, and is different for each repo.
+    pub(crate) changelog_url: Option<String>,
+
     /// Remote packages available from the Repository
     pub(crate) remote_packages: HashMap<ReleaseChannel, RemotePackage>,
 }
 
 impl RepositoryMetadata {
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Default::default()
     }
 
-    pub fn modules(&self) -> Vec<String> {
+    pub(crate) fn modules(&self) -> Vec<String> {
         let mut entries: Vec<_> = self.remote_packages.iter().collect();
         entries.sort_by_key(|(key, _)| *key);
 

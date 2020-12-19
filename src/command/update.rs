@@ -1,6 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 use crate::log_error;
+use crate::Result;
 
 use ajour_core::addon::Addon;
 use ajour_core::cache::{
@@ -8,20 +9,16 @@ use ajour_core::cache::{
     FingerprintCache,
 };
 use ajour_core::config::{load_config, Flavor};
-use ajour_core::error::ClientError;
 use ajour_core::fs::install_addon;
 use ajour_core::network::download_addon;
 use ajour_core::parse::{read_addon_directory, update_addon_fingerprint};
 use ajour_core::repository::RepositoryKind;
-use ajour_core::Result;
 
+use anyhow::{format_err, Context};
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
 
 use futures::future::join_all;
-
-use isahc::config::RedirectPolicy;
-use isahc::prelude::*;
 
 use std::convert::TryFrom;
 use std::path::PathBuf;
@@ -39,19 +36,10 @@ pub fn update_all_addons() -> Result<()> {
 
         let mut addons_to_update = vec![];
 
-        // API request will get limited to 6 per host
-        let shared_client = Arc::new(
-            HttpClient::builder()
-                .redirect_policy(RedirectPolicy::Follow)
-                .max_connections_per_host(6)
-                .build()
-                .unwrap(),
-        );
-
         // Update addons for both flavors
         for flavor in Flavor::ALL.iter() {
             // Only returns None if the path isn't set in the config
-            let addon_directory = config.get_addon_directory_for_flavor(flavor).ok_or_else(|| ClientError::Custom("No WoW directory set. Launch Ajour and make sure a WoW directory is set before using the command line.".to_string()))?;
+            let addon_directory = config.get_addon_directory_for_flavor(flavor).ok_or_else(|| format_err!("No WoW directory set. Launch Ajour and make sure a WoW directory is set before using the command line."))?;
 
             if let Ok(addons) = read_addon_directory(
                 Some(addon_cache.clone()),
@@ -96,7 +84,6 @@ pub fn update_all_addons() -> Result<()> {
                         // Only add addons that have an update available
                         if addon.is_updatable(&package) {
                             addons_to_update.push((
-                                shared_client.clone(),
                                 addon_cache.clone(),
                                 fingerprint_cache.clone(),
                                 *flavor,
@@ -117,7 +104,7 @@ pub fn update_all_addons() -> Result<()> {
 
         addons_to_update
             .iter()
-            .for_each(|(_, _, _, flavor, addon, ..)| {
+            .for_each(|(_, _, flavor, addon, ..)| {
                 let current_version = addon.version().unwrap_or_default();
                 let new_version = addon
                     .relevant_release_package()
@@ -163,16 +150,7 @@ pub fn update_all_addons() -> Result<()> {
 ///
 /// Downloads the latest file, extracts it and refingerprints the addon, saving it to the cache.
 async fn update_addon(
-    (
-        shared_client,
-        addon_cache,
-        fingerprint_cache,
-        flavor,
-        mut addon,
-        temp_directory,
-        addon_directory,
-    ): (
-        Arc<HttpClient>,
+    (addon_cache, fingerprint_cache, flavor, mut addon, temp_directory, addon_directory): (
         Arc<Mutex<AddonCache>>,
         Arc<Mutex<FingerprintCache>>,
         Flavor,
@@ -182,7 +160,7 @@ async fn update_addon(
     ),
 ) -> Result<()> {
     // Download the update to the temp directory
-    download_addon(&shared_client, &addon, &temp_directory).await?;
+    download_addon(&addon, &temp_directory).await?;
 
     // Extracts addon from the downloaded archive to the addon directory and removes the archive
     let installed_folders = install_addon(&addon, &temp_directory, &addon_directory).await?;
@@ -203,14 +181,17 @@ async fn update_addon(
     }));
 
     // Call `update_addon_fingerprint` on each folder concurrently
-    for result in join_all(folders_to_fingerprint.into_iter().map(
-        |(fingerprint_cache, flavor, addon_dir, addon_id)| {
-            update_addon_fingerprint(fingerprint_cache, flavor, addon_dir, addon_id)
+    for (addon_dir, result) in join_all(folders_to_fingerprint.into_iter().map(
+        |(fingerprint_cache, flavor, addon_dir, addon_id)| async move {
+            (
+                addon_dir,
+                update_addon_fingerprint(fingerprint_cache, flavor, addon_dir, addon_id).await,
+            )
         },
     ))
     .await
     {
-        if let Err(e) = result {
+        if let Err(e) = result.context(format!("failed to fingerprint folder: {:?}", addon_dir)) {
             // Log any errors fingerprinting the folder
             log_error(&e);
         }

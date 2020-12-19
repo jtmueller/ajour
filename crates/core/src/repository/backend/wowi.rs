@@ -1,13 +1,12 @@
 use super::*;
 use crate::config::Flavor;
-use crate::error;
+use crate::error::{DownloadError, RepositoryError};
 use crate::network::request_async;
 use crate::repository::{ReleaseChannel, RemotePackage};
 
 use async_trait::async_trait;
 use chrono::{TimeZone, Utc};
-use isahc::config::RedirectPolicy;
-use isahc::prelude::*;
+use isahc::ResponseExt;
 use serde::Deserialize;
 
 use std::collections::HashMap;
@@ -23,33 +22,23 @@ pub struct WowI {
 
 #[async_trait]
 impl Backend for WowI {
-    async fn get_metadata(&self) -> Result<RepositoryMetadata> {
+    async fn get_metadata(&self) -> Result<RepositoryMetadata, RepositoryError> {
         let packages = fetch_remote_packages(&[self.id.clone()]).await?;
 
         let package = packages
             .into_iter()
             .next()
-            .ok_or_else(|| error!("No package for wowi id {}", &self.id))?;
+            .ok_or(RepositoryError::WowIMissingPackage {
+                id: self.id.clone(),
+            })?;
 
         let metadata = metadata_from_wowi_package(package);
 
         Ok(metadata)
     }
-
-    async fn get_changelog(
-        &self,
-        _file_id: Option<i64>,
-        _tag_name: Option<String>,
-    ) -> Result<(String, String)> {
-        Ok((
-            "Please view this changelog in the browser by pressing 'Full Changelog' to the right"
-                .to_owned(),
-            changelog_url(&self.id),
-        ))
-    }
 }
 
-pub fn metadata_from_wowi_package(package: WowIPackage) -> RepositoryMetadata {
+pub(crate) fn metadata_from_wowi_package(package: WowIPackage) -> RepositoryMetadata {
     let mut remote_packages = HashMap::new();
 
     {
@@ -73,7 +62,8 @@ pub fn metadata_from_wowi_package(package: WowIPackage) -> RepositoryMetadata {
     metadata.remote_packages = remote_packages;
 
     let website_url = addon_url(&package.id.to_string());
-    metadata.website_url = Some(website_url);
+    metadata.website_url = Some(website_url.clone());
+    metadata.changelog_url = Some(format!("{}/#changelog", website_url));
     metadata.title = Some(package.title);
 
     metadata
@@ -85,35 +75,27 @@ fn api_endpoint(ids: &str) -> String {
 }
 
 /// Returns the addon website url.
-pub fn addon_url(id: &str) -> String {
+pub(crate) fn addon_url(id: &str) -> String {
     format!("{}{}", ADDON_URL, id)
-}
-
-/// Returns changelog url for addon.
-pub fn changelog_url(id: &str) -> String {
-    format!("{}{}/#changelog", ADDON_URL, id)
 }
 
 /// Function to fetch a remote addon package which contains
 /// information about the addon on the repository.
-pub async fn fetch_remote_packages(ids: &[String]) -> Result<Vec<WowIPackage>> {
-    let client = HttpClient::builder()
-        .redirect_policy(RedirectPolicy::Follow)
-        .max_connections_per_host(6)
-        .build()
-        .unwrap();
+pub(crate) async fn fetch_remote_packages(
+    ids: &[String],
+) -> Result<Vec<WowIPackage>, DownloadError> {
     let url = api_endpoint(&ids.join(","));
     let timeout = Some(30);
-    let mut resp = request_async(&client, &url, vec![], timeout).await?;
+    let mut resp = request_async(&url, vec![], timeout).await?;
 
     if resp.status().is_success() {
         let packages = resp.json();
         Ok(packages?)
     } else {
-        Err(error!(
-            "Couldn't fetch details for addon. Server returned: {}",
-            resp.text()?
-        ))
+        Err(DownloadError::InvalidStatusCode {
+            code: resp.status(),
+            url,
+        })
     }
 }
 

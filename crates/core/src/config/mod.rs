@@ -1,12 +1,13 @@
+use crate::error::FilesystemError;
 use glob::MatchOptions;
 use serde::{Deserialize, Serialize};
+use std::fmt::{self, Display, Formatter};
 use std::path::PathBuf;
 
 mod addons;
 mod wow;
 
 use crate::fs::PersistentData;
-use crate::Result;
 
 pub use crate::config::addons::Addons;
 pub use crate::config::wow::{Flavor, Wow};
@@ -36,6 +37,12 @@ pub struct Config {
 
     #[serde(default)]
     pub backup_wtf: bool,
+
+    #[serde(default)]
+    pub hide_ignored_addons: bool,
+
+    #[serde(default)]
+    pub self_update_channel: SelfUpdateChannel,
 }
 
 impl Config {
@@ -162,10 +169,39 @@ impl Default for ColumnConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SelfUpdateChannel {
+    Stable,
+    Beta,
+}
+
+impl SelfUpdateChannel {
+    pub const fn all() -> [Self; 2] {
+        [SelfUpdateChannel::Stable, SelfUpdateChannel::Beta]
+    }
+}
+
+impl Default for SelfUpdateChannel {
+    fn default() -> Self {
+        SelfUpdateChannel::Stable
+    }
+}
+
+impl Display for SelfUpdateChannel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            SelfUpdateChannel::Stable => "Stable",
+            SelfUpdateChannel::Beta => "Beta",
+        };
+
+        write!(f, "{}", s)
+    }
+}
+
 /// Returns a Config.
 ///
 /// This functions handles the initialization of a Config.
-pub async fn load_config() -> Result<Config> {
+pub async fn load_config() -> Result<Config, FilesystemError> {
     log::debug!("loading config");
 
     Ok(Config::load_or_default()?)

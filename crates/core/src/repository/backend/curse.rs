@@ -1,9 +1,8 @@
 use super::*;
 use crate::config::Flavor;
-use crate::error;
-use crate::network::{post_json_async, request_async};
+use crate::error::DownloadError;
+use crate::network::post_json_async;
 use crate::repository::{ReleaseChannel, RemotePackage};
-use crate::utility::{regex_html_tags_to_newline, regex_html_tags_to_space, truncate};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -23,56 +22,30 @@ pub struct Curse {
 
 #[async_trait]
 impl Backend for Curse {
-    async fn get_metadata(&self) -> Result<RepositoryMetadata> {
+    async fn get_metadata(&self) -> Result<RepositoryMetadata, RepositoryError> {
         let id = self
             .id
             .parse::<i32>()
-            .map_err(|e| error!("Failed to parse curse id as u32: {}", e))?;
+            .map_err(|_| RepositoryError::CurseIdConversion {
+                id: self.id.clone(),
+            })?;
 
         let packages: Vec<Package> = fetch_remote_packages_by_ids(&[id]).await?;
 
         let package = packages
             .into_iter()
             .next()
-            .ok_or_else(|| error!("No package found for curse id {}", id))?;
+            .ok_or(RepositoryError::CurseMissingPackage {
+                id: self.id.clone(),
+            })?;
 
         let metadata = metadata_from_curse_package(self.flavor, package);
 
         Ok(metadata)
     }
-
-    async fn get_changelog(
-        &self,
-        file_id: Option<i64>,
-        _tag_name: Option<String>,
-    ) -> Result<(String, String)> {
-        let file_id = file_id
-            .ok_or_else(|| error!("File id must be provided for curse changelog request"))?;
-
-        let url = format!(
-            "{}/addon/{}/file/{}/changelog",
-            API_ENDPOINT, self.id, file_id
-        );
-        let client = HttpClient::builder().build().unwrap();
-        let mut resp = request_async(&client, &url.clone(), vec![], None).await?;
-
-        if resp.status().is_success() {
-            let changelog: String = resp.text()?;
-
-            let c = regex_html_tags_to_newline()
-                .replace_all(&changelog, "\n")
-                .to_string();
-            let c = regex_html_tags_to_space().replace_all(&c, "").to_string();
-            let c = truncate(&c, 2500).to_string();
-
-            return Ok((c, url));
-        }
-
-        Ok(("No changelog found.".to_owned(), url))
-    }
 }
 
-pub fn metadata_from_curse_package(flavor: Flavor, package: Package) -> RepositoryMetadata {
+pub(crate) fn metadata_from_curse_package(flavor: Flavor, package: Package) -> RepositoryMetadata {
     let mut remote_packages = HashMap::new();
 
     for file in package.latest_files.iter() {
@@ -111,12 +84,13 @@ pub fn metadata_from_curse_package(flavor: Flavor, package: Package) -> Reposito
     let mut metadata = RepositoryMetadata::empty();
     metadata.remote_packages = remote_packages;
     metadata.title = Some(package.name.clone());
-    metadata.website_url = Some(package.website_url);
+    metadata.website_url = Some(package.website_url.clone());
+    metadata.changelog_url = Some(format!("{}/files", package.website_url));
 
     metadata
 }
 
-pub fn metadata_from_fingerprint_info(
+pub(crate) fn metadata_from_fingerprint_info(
     flavor: Flavor,
     info: &AddonFingerprintInfo,
 ) -> RepositoryMetadata {
@@ -168,7 +142,9 @@ pub fn metadata_from_fingerprint_info(
     metadata
 }
 
-pub async fn fetch_remote_packages_by_fingerprint(fingerprints: &[u32]) -> Result<FingerprintInfo> {
+pub(crate) async fn fetch_remote_packages_by_fingerprint(
+    fingerprints: &[u32],
+) -> Result<FingerprintInfo, DownloadError> {
     let mut resp = post_json_async(
         FINGERPRINT_API_ENDPOINT,
         FingerprintData {
@@ -182,24 +158,26 @@ pub async fn fetch_remote_packages_by_fingerprint(fingerprints: &[u32]) -> Resul
         let fingerprint_info = resp.json()?;
         Ok(fingerprint_info)
     } else {
-        Err(error!(
-            "Couldn't fetch details for addon. Server returned: {}",
-            resp.text()?
-        ))
+        Err(DownloadError::InvalidStatusCode {
+            code: resp.status(),
+            url: FINGERPRINT_API_ENDPOINT.to_owned(),
+        })
     }
 }
 
-pub async fn fetch_remote_packages_by_ids(curse_ids: &[i32]) -> Result<Vec<Package>> {
+pub(crate) async fn fetch_remote_packages_by_ids(
+    curse_ids: &[i32],
+) -> Result<Vec<Package>, DownloadError> {
     let url = format!("{}/addon", API_ENDPOINT);
-    let mut resp = post_json_async(url, curse_ids, vec![], None).await?;
+    let mut resp = post_json_async(&url, curse_ids, vec![], None).await?;
     if resp.status().is_success() {
         let packages = resp.json()?;
         Ok(packages)
     } else {
-        Err(error!(
-            "Couldn't fetch details for addon. Server returned: {}",
-            resp.text()?
-        ))
+        Err(DownloadError::InvalidStatusCode {
+            code: resp.status(),
+            url,
+        })
     }
 }
 
@@ -211,6 +189,9 @@ pub struct Package {
     pub name: String,
     pub website_url: String,
     pub latest_files: Vec<File>,
+    pub date_created: DateTime<Utc>,
+    pub date_modified: DateTime<Utc>,
+    pub date_released: DateTime<Utc>,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]

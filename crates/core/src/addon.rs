@@ -1,11 +1,10 @@
 use crate::{
-    error,
+    error::ParseError,
     repository::{
         ReleaseChannel, RemotePackage, RepositoryIdentifiers, RepositoryKind, RepositoryMetadata,
         RepositoryPackage,
     },
     utility::strip_non_digits,
-    Result,
 };
 
 use std::cmp::Ordering;
@@ -20,16 +19,15 @@ pub enum AddonVersionKey {
 
 #[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum AddonState {
+    Completed,
+    Downloading,
+    Error(String),
+    Fingerprint,
+    Idle,
     Ignored,
     Unknown,
-    Ajour(Option<String>),
-    Downloading,
-    Fingerprint,
     Unpacking,
-    // TODO: I have currently removed the state where curse-id only addons become corrupt.
-    // It can happen that the fingerprint is unknown to the API but everything else is good.
-    // This is properly not the best solution going forward, but for now it solves the purpose.
-    Corrupted,
+    Retry,
     Updatable,
 }
 
@@ -72,7 +70,7 @@ impl Ord for AddonFolder {
 
 #[allow(clippy::too_many_arguments)]
 impl AddonFolder {
-    pub fn new(
+    pub(crate) fn new(
         id: String,
         title: String,
         interface: Option<String>,
@@ -126,12 +124,6 @@ pub struct Addon {
     #[cfg(feature = "gui")]
     pub details_btn_state: iced_native::button::State,
     #[cfg(feature = "gui")]
-    pub remote_btn_state: iced_native::button::State,
-    #[cfg(feature = "gui")]
-    pub local_btn_state: iced_native::button::State,
-    #[cfg(feature = "gui")]
-    pub full_changelog_btn_state: iced_native::button::State,
-    #[cfg(feature = "gui")]
     pub update_btn_state: iced_native::button::State,
     #[cfg(feature = "gui")]
     pub force_btn_state: iced_native::button::State,
@@ -145,6 +137,8 @@ pub struct Addon {
     pub website_btn_state: iced_native::button::State,
     #[cfg(feature = "gui")]
     pub pick_release_channel_state: iced_native::pick_list::State<ReleaseChannel>,
+    #[cfg(feature = "gui")]
+    pub changelog_btn_state: iced_native::button::State,
 }
 
 impl Addon {
@@ -153,17 +147,11 @@ impl Addon {
             primary_folder_id: primary_folder_id.to_string(),
             folders: Default::default(),
             release_channel: Default::default(),
-            state: AddonState::Ajour(None),
+            state: AddonState::Idle,
             repository: Default::default(),
 
             #[cfg(feature = "gui")]
             details_btn_state: Default::default(),
-            #[cfg(feature = "gui")]
-            remote_btn_state: Default::default(),
-            #[cfg(feature = "gui")]
-            local_btn_state: Default::default(),
-            #[cfg(feature = "gui")]
-            full_changelog_btn_state: Default::default(),
             #[cfg(feature = "gui")]
             update_btn_state: Default::default(),
             #[cfg(feature = "gui")]
@@ -178,15 +166,17 @@ impl Addon {
             website_btn_state: Default::default(),
             #[cfg(feature = "gui")]
             pick_release_channel_state: Default::default(),
+            #[cfg(feature = "gui")]
+            changelog_btn_state: Default::default(),
         }
     }
 
-    pub fn build_with_repo_and_folders(
+    pub(crate) fn build_with_repo_and_folders(
         repo_package: RepositoryPackage,
         folders: Vec<AddonFolder>,
-    ) -> Result<Self> {
+    ) -> Result<Self, ParseError> {
         if folders.is_empty() {
-            return Err(error!("No folders passed to addon"));
+            return Err(ParseError::BuildAddonEmptyFolders);
         }
 
         let mut addon = Addon::empty("");
@@ -308,6 +298,7 @@ impl Addon {
             .metadata()
             .map(|m| m.game_version.as_deref())
             .flatten()
+            .filter(|s| !s.is_empty())
             .is_some()
         {
             self.metadata().map(|m| m.game_version.as_deref()).flatten()
@@ -334,6 +325,13 @@ impl Addon {
     /// Returns the website url of the addon.
     pub fn website_url(&self) -> Option<&str> {
         self.metadata().map(|m| m.website_url.as_deref()).flatten()
+    }
+
+    /// Returns the changelog url of the addon.
+    pub fn changelog_url(&self) -> Option<&str> {
+        self.metadata()
+            .map(|m| m.changelog_url.as_deref())
+            .flatten()
     }
 
     /// Returns the curse id of the addon, if applicable.
@@ -368,13 +366,6 @@ impl Addon {
             self.primary_addon_folder()
                 .map(|f| f.repository_identifiers.wowi.as_deref())
                 .flatten()
-        }
-    }
-
-    /// Set title for the addon
-    pub fn set_title(&mut self, title: String) {
-        if let Some(metadata) = self.repository.as_mut().map(|r| &mut r.metadata) {
-            metadata.title = Some(title);
         }
     }
 
@@ -433,7 +424,7 @@ impl Addon {
     }
 
     /// Returns the first release_package which is `Some`.
-    pub fn fallback_release_package(&self) -> Option<RemotePackage> {
+    pub(crate) fn fallback_release_package(&self) -> Option<RemotePackage> {
         let mut remote_packages = self.remote_packages();
         if let Some(stable_package) = remote_packages.remove(&ReleaseChannel::Stable) {
             Some(stable_package)
@@ -504,16 +495,6 @@ impl Addon {
                 alpha_package
             }
         }
-    }
-
-    pub async fn get_changelog(&self, is_remote: bool) -> Result<(String, String)> {
-        if let Some(repository) = self.repository() {
-            return repository
-                .get_changelog(self.release_channel, is_remote)
-                .await;
-        }
-
-        Err(error!("No repository set for addon"))
     }
 }
 
